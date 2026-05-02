@@ -1,115 +1,101 @@
 /**
- * Authentication Middleware
+ * Hospital Authentication Routes
  *
- * Three authentication modes:
- * 1. Hospital API Key  — for hospital EMR systems
- * 2. Doctor JWT Token  — for the hospital dashboard web UI
- * 3. App User JWT      — for the patient Android app
+ * POST /api/auth/hospital/register — Register a new hospital (admin only, protected by ADMIN_SECRET)
+ * POST /api/auth/doctor/login      — Doctor logs in, receives JWT
  */
 
-import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import { prisma } from '../db/client';
 import { logger } from '../utils/logger';
 
-export interface AuthenticatedRequest extends Request {
-  hospitalId?: string;
-  doctorId?: string;
-  userId?: string; // patientId/appUserId
-  role?: 'PATIENT' | 'DOCTOR' | 'SYSTEM';
-  authMode?: 'api_key' | 'jwt_doctor' | 'jwt_app';
-}
+const router = Router();
 
-/**
- * Validates X-Hospital-API-Key header.
- */
-export async function requireHospitalApiKey(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  const apiKey = req.headers['x-hospital-api-key'] as string | undefined;
-  if (!apiKey) {
-    res.status(401).json({ error: 'Missing X-Hospital-API-Key header' });
+// POST /api/auth/hospital/register
+router.post('/hospital/register', async (req: Request, res: Response): Promise<void> => {
+  const adminSecret = req.headers['x-admin-secret'];
+  if (adminSecret !== process.env.ADMIN_SECRET) {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+
+  const { name, address, phone } = req.body;
+  if (!name) {
+    res.status(400).json({ error: 'Hospital name is required' });
     return;
   }
 
   try {
-    const hospitals = await prisma.hospital.findMany({
-      where: { isActive: true },
-      select: { id: true, apiKeyHash: true },
+    const rawApiKey = `msk_${crypto.randomBytes(32).toString('hex')}`;
+    const apiKeyHash = await bcrypt.hash(rawApiKey, 12);
+
+    const hospital = await prisma.hospital.create({
+      data: {
+        name,
+        address,
+        phone,
+        apiKey: rawApiKey.slice(0, 8),
+        apiKeyHash,
+      },
     });
 
-    let matchedHospitalId: string | null = null;
-    for (const h of hospitals) {
-      if (await bcrypt.compare(apiKey, h.apiKeyHash)) {
-        matchedHospitalId = h.id;
-        break;
-      }
-    }
+    logger.info('New hospital registered', { hospitalId: hospital.id, name });
 
-    if (!matchedHospitalId) {
-      res.status(401).json({ error: 'Invalid API key' });
+    res.status(201).json({
+      hospitalId: hospital.id,
+      name: hospital.name,
+      apiKey: rawApiKey,
+      warning: 'Store this API key securely. It will not be shown again.',
+    });
+  } catch (err) {
+    logger.error('Hospital registration failed', { err });
+    res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
+// POST /api/auth/doctor/login
+router.post('/doctor/login', async (req: Request, res: Response): Promise<void> => {
+  const { email, password, hospitalId } = req.body;
+  if (!email || !password || !hospitalId) {
+    res.status(400).json({ error: 'email, password and hospitalId are required' });
+    return;
+  }
+
+  try {
+    const doctor = await prisma.doctor.findFirst({
+      where: { email, hospitalId, isActive: true },
+    });
+
+    if (!doctor) {
+      res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
 
-    req.hospitalId = matchedHospitalId;
-    req.role = 'SYSTEM';
-    req.authMode = 'api_key';
-    next();
+    const expiresIn = (process.env.JWT_EXPIRES_IN || '8h') as any;
+
+    const token = jwt.sign(
+      { doctorId: doctor.id, hospitalId: doctor.hospitalId },
+      process.env.JWT_SECRET!,
+      { expiresIn }
+    );
+
+    res.json({
+      token,
+      doctor: {
+        id: doctor.id,
+        name: doctor.name,
+        role: doctor.role,
+        specialty: doctor.specialty,
+      },
+    });
   } catch (err) {
-    logger.error('Auth middleware error', { err });
-    res.status(500).json({ error: 'Authentication error' });
+    logger.error('Doctor login failed', { err });
+    res.status(500).json({ error: 'Login failed' });
   }
-}
+});
 
-/**
- * Validates Bearer JWT token (Doctor or App User).
- */
-export function requireJwt(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): void {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing or invalid Authorization header' });
-    return;
-  }
-
-  const token = authHeader.slice(7);
-  try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET!) as any;
-
-    if (payload.doctorId) {
-      req.doctorId = payload.doctorId;
-      req.hospitalId = payload.hospitalId;
-      req.role = 'DOCTOR';
-      req.authMode = 'jwt_doctor';
-    } else if (payload.appUserId) {
-      req.userId = payload.appUserId;
-      req.role = 'PATIENT';
-      req.authMode = 'jwt_app';
-    }
-
-    next();
-  } catch {
-    res.status(401).json({ error: 'Invalid or expired token' });
-  }
-}
-
-/**
- * Accepts any valid authentication.
- */
-export async function requireAnyAuth(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  const apiKey = req.headers['x-hospital-api-key'];
-  if (apiKey) {
-    return requireHospitalApiKey(req, res, next);
-  }
-  return requireJwt(req, res, next) as unknown as void;
-}
+export default router;
