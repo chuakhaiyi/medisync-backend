@@ -1,9 +1,11 @@
-import { PrismaClient } from '@prisma/client';
+const { PrismaClient } = require('@prisma/client');
 import { logger } from '../utils/logger';
 
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+type PrismaClientType = InstanceType<typeof PrismaClient>;
 
-export const prisma =
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClientType };
+
+export const prisma: PrismaClientType =
   globalForPrisma.prisma ??
   new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['query', 'warn', 'error'] : ['warn', 'error'],
