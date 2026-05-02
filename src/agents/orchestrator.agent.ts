@@ -101,12 +101,12 @@ Output ONLY JSON: { "intent": "...", "confidence": 0.9, "reasoning": "..." }
       patientCondition: profile.data?.primaryCondition
     });
 
-    if (clinicalResult.success && ['CRITICAL', 'EMERGENCY'].includes(clinicalResult.data.urgency)) {
+    if (clinicalResult.success && clinicalResult.data && ['CRITICAL', 'EMERGENCY'].includes(clinicalResult.data.urgency)) {
       await this.notificationAgent.run({
         patientId: input.patientId!,
         type: 'CLINICIAN_ALERT',
-        message: `Triage Alert: ${clinicalResult.data.riskReason}`,
-        priority: clinicalResult.data.urgency === 'EMERGENCY' ? 'CRITICAL' : 'URGENT'
+        message: `Triage Alert: ${clinicalResult.data?.riskReason}`,
+        priority: clinicalResult.data?.urgency === 'EMERGENCY' ? 'CRITICAL' : 'URGENT'
       });
     }
 
@@ -114,12 +114,9 @@ Output ONLY JSON: { "intent": "...", "confidence": 0.9, "reasoning": "..." }
   }
 
   private async handleMorningCheck(input: OrchestratorInput): Promise<AgentResponse<any>> {
-    // Composite workflow: Data Query + Clinical Logic
     const profile = await this.patientDataAgent.run({ action: 'GET_PROFILE', patientId: input.patientId!, requestorId: input.userId!, requestorRole: input.role });
     const records = await this.patientDataAgent.run({ action: 'GET_RECORDS', patientId: input.patientId!, requestorId: input.userId!, requestorRole: input.role });
 
-    // In a real system, we'd call a dedicated MorningCheckAgent.
-    // Here we'll simulate the response combining multiple agents.
     return {
       success: true,
       data: {
@@ -132,7 +129,6 @@ Output ONLY JSON: { "intent": "...", "confidence": 0.9, "reasoning": "..." }
   }
 
   private async handleMedicationAnalysis(input: OrchestratorInput): Promise<AgentResponse<any>> {
-    // Chain: Patient Data (Logs) -> Adherence Logic
     const records = await this.patientDataAgent.run({ action: 'GET_RECORDS', patientId: input.patientId!, requestorId: input.userId!, requestorRole: input.role });
     return {
       success: true,
