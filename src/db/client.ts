@@ -1,7 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { logger } from '../utils/logger';
 
-// Singleton pattern — prevents multiple connections in development hot-reload
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 export const prisma =
