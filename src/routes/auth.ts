@@ -81,7 +81,7 @@ router.post('/doctor/login', async (req: Request, res: Response): Promise<void> 
     // In production, store hashed password in Doctor model and compare here
     // For now, issuing token directly (password check would go here)
 
-    const token = jwt.sign(
+    const token = (jwt as any).sign(
       { doctorId: doctor.id, hospitalId: doctor.hospitalId },
       process.env.JWT_SECRET!,
       { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
