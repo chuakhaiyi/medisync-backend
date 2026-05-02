@@ -1,0 +1,222 @@
+// MediSync+ Backend Database Schema
+// Designed for easy hospital EMR integration
+// All PHI fields are encrypted at rest via application-level AES-256-GCM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Hospital / Tenant ───────────────────────────────────────────────────────
+// One record per hospital. Enables multi-tenant deployment.
+model Hospital {
+  id            String   @id @default(uuid())
+  name          String
+  address       String?
+  phone         String?
+  apiKey        String   @unique  // Hospital authenticates with this key
+  apiKeyHash    String            // bcrypt hash; never store plaintext
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  doctors       Doctor[]
+  patients      Patient[]
+  auditLogs     AuditLog[]
+
+  @@map("hospitals")
+}
+
+// ─── Doctor / Care Team Member ────────────────────────────────────────────────
+model Doctor {
+  id            String   @id @default(uuid())
+  hospitalId    String
+  name          String
+  specialty     String
+  role          String   @default("DOCTOR")  // DOCTOR | NURSE | SPECIALIST
+  email         String?
+  phone         String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  hospital      Hospital @relation(fields: [hospitalId], references: [id])
+  patientRecords PatientRecord[]
+  appointments  Appointment[]
+
+  @@map("doctors")
+}
+
+// ─── Patient ──────────────────────────────────────────────────────────────────
+// Core patient identity record. Only essential fields; PII encrypted.
+model Patient {
+  id              String   @id @default(uuid())
+  hospitalId      String
+  mrn             String              // Medical Record Number (hospital-scoped)
+  nameEncrypted   String              // AES-256-GCM encrypted
+  age             Int
+  bloodType       String?
+  allergiesJson   String?             // JSON array, encrypted
+  contactEncrypted String?            // Phone, encrypted
+  emergencyContactEncrypted String?
+  primaryCondition String
+  riskLevel       String   @default("STABLE")  // STABLE | WARNING | CRITICAL
+  isActive        Boolean  @default(true)
+  appUserId       String?  @unique    // Android app patient ID (synced on first login)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  hospital        Hospital  @relation(fields: [hospitalId], references: [id])
+  records         PatientRecord[]
+  appointments    Appointment[]
+  syncQueue       SyncQueueItem[]
+
+  @@unique([hospitalId, mrn])
+  @@map("patients")
+}
+
+// ─── Patient Record (Doctor's Input → AI Timetable Source) ────────────────────
+// This is the PRIMARY input doctors use to configure a patient's care plan.
+// The AI agent on the Android app reads this to generate the daily task timetable.
+model PatientRecord {
+  id              String   @id @default(uuid())
+  patientId       String
+  doctorId        String
+  recordType      String   // DISCHARGE | FOLLOW_UP | ROUTINE_VISIT | SPECIALIST_CONSULT
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  isActive        Boolean  @default(true)   // Only one active record at a time
+
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor          Doctor   @relation(fields: [doctorId], references: [id])
+
+  // ── Medications ─────────────────────────────────────────────────────────────
+  medications     Medication[]
+
+  // ── Next Appointment / Check-up ─────────────────────────────────────────────
+  nextAppointmentDate    String?   // ISO date "yyyy-MM-dd"
+  nextAppointmentTime    String?   // "HH:mm"
+  nextAppointmentType    String?   // FOLLOW_UP | ROUTINE | SPECIALIST
+  nextAppointmentNotes   String?
+
+  // ── Doctor's Advice ──────────────────────────────────────────────────────────
+  // Structured advice items converted to app tasks by the AI agent
+  adviceItems     DoctorAdvice[]
+
+  // ── Discharge / Visit Summary ────────────────────────────────────────────────
+  diagnosisSummary       String?
+  treatmentSummary       String?
+  dischargeNotes         String?
+  restrictionsJson       String?   // JSON: { "diet": [...], "activity": [...] }
+  followUpInstructions   String?
+
+  @@map("patient_records")
+}
+
+// ─── Medication (Doctor-Prescribed) ──────────────────────────────────────────
+// Each medication prescribed in a patient record.
+// The app agent reads this to generate medication reminder tasks.
+model Medication {
+  id              String   @id @default(uuid())
+  recordId        String
+  name            String                        // e.g., "Furosemide"
+  dosage          String                        // e.g., "40mg"
+  medicationClass String?                       // e.g., "Diuretic"
+  frequency       String                        // once_daily | twice_daily | thrice_daily | as_needed
+  times           String                        // JSON array: ["08:00", "20:00"]
+  instructions    String?                       // e.g., "Take with food", "Do not crush"
+  requiresFood    Boolean  @default(false)
+  criticalMed     Boolean  @default(false)      // true = alert if missed
+  startDate       String                        // "yyyy-MM-dd"
+  endDate         String?                       // null = ongoing
+  sideEffects     String?
+  pillColorHex    String?  @default("#4DB6AC")
+  isActive        Boolean  @default(true)
+
+  record          PatientRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@map("medications")
+}
+
+// ─── Doctor's Advice Item ────────────────────────────────────────────────────
+// Structured lifestyle / care instructions that become app checklist tasks.
+// Examples: "Walk 15 minutes every morning", "Avoid oily food", "Weigh yourself daily"
+model DoctorAdvice {
+  id              String   @id @default(uuid())
+  recordId        String
+  category        String   // EXERCISE | DIET | MONITORING | MEDICATION | GENERAL
+  instruction     String   // "Walk 15-20 minutes"
+  timing          String?  // "every morning" | "after dinner" | "twice daily" etc.
+  timeOfDay       String?  // MORNING | AFTERNOON | EVENING | ANY
+  scheduledTime   String?  // "07:30" — specific time if applicable
+  frequency       String   @default("daily")  // daily | weekly | as_needed
+  durationDays    Int?     // null = ongoing
+  priority        String   @default("ROUTINE")  // ROUTINE | IMPORTANT | CRITICAL
+  notes           String?
+
+  record          PatientRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@map("doctor_advice")
+}
+
+// ─── Appointment ──────────────────────────────────────────────────────────────
+model Appointment {
+  id              String   @id @default(uuid())
+  patientId       String
+  doctorId        String
+  dateTime        String   // "yyyy-MM-dd HH:mm"
+  type            String   // FOLLOW_UP | ROUTINE | EMERGENCY | SPECIALIST
+  status          String   @default("CONFIRMED")  // CONFIRMED | CANCELLED | COMPLETED | RESCHEDULED
+  location        String?
+  notes           String?
+  syncedToApp     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor          Doctor   @relation(fields: [doctorId], references: [id])
+
+  @@map("appointments")
+}
+
+// ─── Sync Queue ───────────────────────────────────────────────────────────────
+// Items waiting to be pushed to the patient's Android app on next sync.
+// Ensures reliable offline-capable delivery.
+model SyncQueueItem {
+  id              String   @id @default(uuid())
+  patientId       String
+  itemType        String   // PATIENT_RECORD | APPOINTMENT | REMINDER | TIMETABLE
+  payload         String   // JSON payload for the app
+  priority        String   @default("NORMAL")  // URGENT | NORMAL | LOW
+  attempts        Int      @default(0)
+  lastAttemptAt   DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("sync_queue")
+}
+
+// ─── Audit Log ───────────────────────────────────────────────────────────────
+// HIPAA-compliant audit trail for all data access and modifications.
+model AuditLog {
+  id              String   @id @default(uuid())
+  hospitalId      String?
+  actorId         String   // doctorId or "system"
+  actorType       String   // DOCTOR | SYSTEM | APP_SYNC
+  action          String   // CREATE_RECORD | UPDATE_RECORD | VIEW_PATIENT | SYNC | etc.
+  resourceType    String   // Patient | PatientRecord | Medication | etc.
+  resourceId      String?
+  ipAddress       String?
+  userAgent       String?
+  metadata        String?  // JSON with additional context
+  timestamp       DateTime @default(now())
+
+  hospital        Hospital? @relation(fields: [hospitalId], references: [id])
+
+  @@index([hospitalId, timestamp])
+  @@index([actorId, timestamp])
+  @@map("audit_logs")
+}
