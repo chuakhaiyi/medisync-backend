@@ -56,7 +56,7 @@ Reported Symptoms: ${input.symptoms}
 `;
 
       const messages: LlmMessage[] = [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: this.SYSTEM_PROMPT },
         { role: 'user', content: userPrompt }
       ];
 
