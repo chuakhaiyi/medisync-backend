@@ -200,12 +200,17 @@ router.post(
           criticalMed: m.criticalMed,
           frequency: m.frequency,
         })),
-        adviceItems: data.adviceItems,
-        nextAppointmentDate: data.nextAppointmentDate,
-        nextAppointmentTime: data.nextAppointmentTime,
-        nextAppointmentType: data.nextAppointmentType,
-        nextAppointmentNotes: data.nextAppointmentNotes,
-        restrictions,
+        adviceItems: data.adviceItems.map(a => ({
+          category: a.category,
+          instruction: a.instruction,               
+          timing: a.timing,
+          timeOfDay: a.timeOfDay,
+          scheduledTime: a.scheduledTime,
+          frequency: a.frequency,                   
+          durationDays: a.durationDays,
+          priority: a.priority,                
+          notes: a.notes,
+        })),
       })
         .then(async (timetable) => {
           // Push timetable to sync queue for the Android app to pull
