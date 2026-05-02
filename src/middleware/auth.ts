@@ -1,16 +1,80 @@
 /**
- * Hospital Authentication Routes
+ * Hospital Authentication Middleware & Routes
  *
- * POST /api/auth/hospital/register — Register a new hospital (admin only, protected by ADMIN_SECRET)
- * POST /api/auth/doctor/login      — Doctor logs in, receives JWT
+ * Exports:
+ *   - AuthenticatedRequest: Extended Request with auth fields
+ *   - requireAnyAuth: Middleware that authenticates via JWT or API key
+ *   - default (router): Auth routes (hospital register, doctor login)
  */
 
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import crypto from 'crypto';
 import { prisma } from '../db/client';
 import { logger } from '../utils/logger';
+
+// ── Auth types & middleware (named exports) ─────────────────────────────────
+
+export interface AuthenticatedRequest extends Request {
+  hospitalId?: string;
+  doctorId?: string;
+  userId?: string;
+  authMode?: string;
+}
+
+export async function requireAnyAuth(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const authHeader = req.headers.authorization;
+  const apiKey = req.headers['x-api-key'] as string | undefined;
+
+  // Try JWT (Bearer token) first
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
+        doctorId?: string;
+        hospitalId?: string;
+        userId?: string;
+      };
+      req.doctorId = decoded.doctorId;
+      req.hospitalId = decoded.hospitalId;
+      req.userId = decoded.userId;
+      req.authMode = decoded.userId ? 'jwt_user' : 'jwt_doctor';
+      return next();
+    } catch {
+      res.status(401).json({ error: 'Invalid or expired token' });
+      return;
+    }
+  }
+
+  // Try API key
+  if (apiKey) {
+    try {
+      const hospitals = await prisma.hospital.findMany({ where: { isActive: true } });
+      for (const hospital of hospitals) {
+        const match = await bcrypt.compare(apiKey, hospital.apiKeyHash);
+        if (match) {
+          req.hospitalId = hospital.id;
+          req.authMode = 'api_key';
+          return next();
+        }
+      }
+      res.status(401).json({ error: 'Invalid API key' });
+      return;
+    } catch {
+      res.status(500).json({ error: 'Authentication failed' });
+      return;
+    }
+  }
+
+  res.status(401).json({ error: 'Authentication required' });
+}
+
+// ── Auth routes (default export) ────────────────────────────────────────────
 
 const router = Router();
 
