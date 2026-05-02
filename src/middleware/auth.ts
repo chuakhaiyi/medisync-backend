@@ -7,8 +7,7 @@
 
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { v4 as uuidv4 } from 'uuid';
+import jwt, { SignOptions } from 'jsonwebtoken';
 import crypto from 'crypto';
 import { prisma } from '../db/client';
 import { logger } from '../utils/logger';
@@ -74,13 +73,15 @@ router.post('/doctor/login', async (req: Request, res: Response): Promise<void> 
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
-
-    const expiresIn = (process.env.JWT_EXPIRES_IN || '8h') as any;
+    
+    const signOptions: SignOptions = {
+      expiresIn: 60 * 60 * 8,
+    };
 
     const token = jwt.sign(
       { doctorId: doctor.id, hospitalId: doctor.hospitalId },
       process.env.JWT_SECRET!,
-      { expiresIn }
+      signOptions
     );
 
     res.json({
