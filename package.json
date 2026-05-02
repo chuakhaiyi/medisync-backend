@@ -1,11 +1,11 @@
 {
   "name": "medisync-backend",
   "version": "1.0.0",
-  "description": "MediSync+ Hospital Backend API — secure bridge between hospital EMR systems and the MediSync Android app",
+  "description": "MediSync+ Hospital Backend API",
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "node dist/index.js",
     "db:migrate": "prisma migrate deploy",
     "db:generate": "prisma generate",
@@ -14,7 +14,7 @@
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
-    "@prisma/client": "^7.8.0",
+    "@prisma/client": "5.14.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
@@ -36,9 +36,9 @@
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.6",
     "@types/morgan": "^1.9.9",
-    "@types/node": "^20.19.39",
+    "@types/node": "^20.14.0",
     "@types/uuid": "^9.0.8",
-    "prisma": "^7.8.0",
+    "prisma": "5.14.0",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.4.5"
   }
