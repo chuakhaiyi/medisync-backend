@@ -23,6 +23,24 @@ import aiRouter from './routes/ai';
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
+// ── CRASH PREVENTION — must be first ─────────────────────────────────────────
+// Prevents the server from dying on unhandled promise rejections
+// (e.g. LLM API failure inside generateTimetable() .then() chain)
+process.on('unhandledRejection', (reason: unknown) => {
+  logger.error('Unhandled promise rejection — server kept alive', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+  });
+});
+
+// Prevents the server from dying on uncaught synchronous exceptions
+process.on('uncaughtException', (err: Error) => {
+  logger.error('Uncaught exception — server kept alive', {
+    message: err.message,
+    stack: err.stack,
+  });
+});
+
 // ── Security Middleware ──────────────────────────────────────────────────────
 app.use(helmet({
   contentSecurityPolicy: {
@@ -38,7 +56,6 @@ app.use(helmet({
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim());
 app.use(cors({
   origin: (origin, cb) => {
-    // Allow server-to-server calls (no origin) and allowed origins
     if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
     cb(new Error('Not allowed by CORS'));
   },
@@ -46,7 +63,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Hospital-API-Key', 'X-Admin-Secret'],
 }));
 
-// Rate limiting — protect against abuse
+// Rate limiting
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
   max: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
@@ -69,8 +86,28 @@ app.use('/api/records', recordsRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api/ai', aiRouter);
 
-// ── Error Handler ─────────────────────────────────────────────────────────────
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+// ── Error Handlers ────────────────────────────────────────────────────────────
+
+// FIX: Catch malformed JSON bodies — this was causing the `"}"` crash log.
+// express.json() throws a SyntaxError when it receives invalid JSON.
+// Without this, the error bubbles up unhandled and crashes the process.
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+    logger.warn('Malformed JSON body received', {
+      url: req.url,
+      body: req.body,
+      error: err.message,
+    });
+    res.status(400).json({ error: 'Invalid JSON in request body' });
+    return;
+  }
+
+  // CORS errors
+  if (err.message === 'Not allowed by CORS') {
+    res.status(403).json({ error: 'CORS: origin not allowed' });
+    return;
+  }
+
   logger.error('Unhandled error', { message: err.message, stack: err.stack });
   res.status(500).json({ error: 'Internal server error' });
 });
