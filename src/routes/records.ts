@@ -41,7 +41,7 @@ const AdviceSchema = z.object({
   timing: z.string().optional(),
   timeOfDay: z.enum(['MORNING', 'AFTERNOON', 'EVENING', 'ANY']).optional(),
   scheduledTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-  frequency: z.string().default('daily'),
+  frequency: z.string().min(1).default('daily'),
   durationDays: z.number().int().positive().optional(),
   priority: z.enum(['ROUTINE', 'IMPORTANT', 'CRITICAL']).default('ROUTINE'),
   notes: z.string().optional(),
