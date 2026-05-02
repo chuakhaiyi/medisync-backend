@@ -43,7 +43,7 @@ interface PatientRecordInput {
     frequency: string;
   }>;
   adviceItems: Array<{
-    category: string;
+    category?: string;
     instruction: string;
     timing?: string;
     timeOfDay?: string;
